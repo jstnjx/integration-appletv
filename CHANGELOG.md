@@ -9,10 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Changes in the next release_
 
+---
+
+## v0.24.0 - 2026-07-28
 ### Added
 - Added localization languages: da_DK, hu_HU, it_IT, no_NO, pl_PL, pt_PT
 
 ### Fixed
+- Pairing patch for tvOS 27 ([#165](https://github.com/unfoldedcircle/integration-appletv/pull/165))).
 - Verify scan match in `_find_atv` and bound `pyatv.connect` with a timeout ([#157](https://github.com/unfoldedcircle/integration-appletv/pull/157)).
 - Back off periodic app-list/output-device scans in poll worker ([#156](https://github.com/unfoldedcircle/integration-appletv/pull/156)).
 - Make debounce decorator per-instance to avoid cross-device cancellation ([#155](https://github.com/unfoldedcircle/integration-appletv/pull/155)).
@@ -25,8 +29,6 @@ _Changes in the next release_
 - Bump pyright from 1.1.410 to 1.1.411 ([#149](https://github.com/unfoldedcircle/integration-appletv/pull/149)).
 - Bump actions/setup-python from 6.2.0 to 6.3.0 ([#147](https://github.com/unfoldedcircle/integration-appletv/pull/147)).
 - Bump softprops/action-gh-release from 3.0.0 to 3.0.1 ([#144](https://github.com/unfoldedcircle/integration-appletv/pull/144)).
-
----
 
 ## v0.23.0 - 2026-07-01
 ### Changed
