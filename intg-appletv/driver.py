@@ -13,6 +13,9 @@ import os
 import sys
 from typing import Any, cast
 
+import pyatv.protocols.airplay.auth as airplay_auth
+import pyatv.protocols.airplay.auth.hap as airplay_auth_hap
+import pyatv.protocols.airplay.pairing as airplay_pairing
 from typing_extensions import override
 import ucapi
 from ucapi import Entity, media_player
@@ -22,6 +25,7 @@ import config
 from entities import AppleTVEntity
 from i18n import _a
 from media_player import AppleTVMediaPlayer
+import monkey_patch
 from remote import AppleTVRemote
 import selector
 import sensor
@@ -383,6 +387,16 @@ async def main() -> None:
     logging.getLogger("remote").setLevel(level)
 
     # logging.getLogger("pyatv").setLevel(logging.DEBUG)
+
+    # TODO patch for tvOS 27, to be removed when pyatv updated
+    airplay_auth.pair_setup = monkey_patch.patched_airplay_hap_pair_setup
+    airplay_pairing.pair_setup = monkey_patch.patched_airplay_hap_pair_setup
+    airplay_hap_setup_procedure = airplay_auth_hap.AirPlayHapPairSetupProcedure
+    airplay_hap_setup_procedure.__init__ = monkey_patch.patched_airplay_hap_pair_setup_procedure_init
+    airplay_hap_setup_procedure.start_pairing = monkey_patch.patched_airplay_hap_pair_setup_procedure_start_pairing
+    airplay_hap_setup_procedure.finish_pairing = monkey_patch.patched_airplay_hap_pair_setup_procedure_finish_pairing
+    airplay_pairing_handler = airplay_pairing.AirPlayPairingHandler
+    airplay_pairing_handler.begin = monkey_patch.patched_airplay_pairing_begin
 
     # load paired devices
     config.devices = config.Devices(api.config_dir_path, on_device_added, on_device_removed, on_device_updated)
