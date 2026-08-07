@@ -11,6 +11,13 @@ _Changes in the next release_
 
 ---
 
+## v0.24.1 - 2026-08-07
+### Added
+- Cross-VLAN support by @henrikwidlund ([#173](https://github.com/unfoldedcircle/integration-appletv/pull/173)).
+
+### Changed
+- Use arm64 native runner and updated GitHub actions ([#166](https://github.com/unfoldedcircle/integration-appletv/pull/166)).
+
 ## v0.24.0 - 2026-07-28
 ### Added
 - Added localization languages: da_DK, hu_HU, it_IT, no_NO, pl_PL, pt_PT
