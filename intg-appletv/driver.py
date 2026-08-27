@@ -31,6 +31,7 @@ import selector
 import sensor
 import setup_flow
 import tv
+from utils import replace_bad_chars
 
 _LOG = logging.getLogger("driver")  # avoid having __main__ in log messages
 if sys.platform == "win32":
@@ -40,10 +41,14 @@ if sys.platform == "win32":
 _LOOP = asyncio.new_event_loop()
 asyncio.set_event_loop(_LOOP)
 
+SOURCE_POLL_INTERVAL = 0.5
+"""How often to sample pyatv's local active-app cache for source changes."""
+
 # Global variables
 api = uc.IntegrationAPI(_LOOP)
 _configured_atvs: dict[str, tv.AppleTv] = {}
 _background_tasks: set[asyncio.Task[Any]] = set()
+_source_watch_tasks: dict[str, asyncio.Task[Any]] = {}
 
 
 def _handle_background_task_done(task: asyncio.Task[Any]) -> None:
@@ -64,6 +69,59 @@ def _spawn_task(coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
     _background_tasks.add(task)
     task.add_done_callback(_handle_background_task_done)
     return task
+
+
+async def _watch_atv_source(device_id: str, atv: tv.AppleTv) -> None:
+    """Publish foreground-app changes without waiting for the 10 second media poll.
+
+    ``AppleTv.app_name`` reads pyatv's local MRP player-state cache, so sampling it
+    does not issue an Apple TV network request. The normal media/artwork poll remains
+    unchanged; this watcher only accelerates propagation of ``SOURCE`` changes.
+    """
+    last_source: str | None = None
+    _LOG.debug("[%s] Starting foreground-app watcher (%.1fs)", device_id, SOURCE_POLL_INTERVAL)
+
+    try:
+        while _configured_atvs.get(device_id) is atv:
+            app_name = atv.app_name
+            source = replace_bad_chars(app_name) if app_name else ""
+
+            if source:
+                if source != last_source:
+                    _LOG.debug("[%s] Foreground app changed: %s -> %s", device_id, last_source or "<unknown>", source)
+                    last_source = source
+                    on_atv_update(device_id, {media_player.Attributes.SOURCE: source})
+            else:
+                # Re-emit the current app after a disconnect/reconnect or a temporary
+                # period where pyatv has no active-client information.
+                last_source = None
+
+            await asyncio.sleep(SOURCE_POLL_INTERVAL)
+    finally:
+        _LOG.debug("[%s] Foreground-app watcher stopped", device_id)
+
+
+def _ensure_source_watch(device_id: str, atv: tv.AppleTv) -> None:
+    """Ensure exactly one foreground-app watcher exists for a configured Apple TV."""
+    existing = _source_watch_tasks.get(device_id)
+    if existing and not existing.done():
+        return
+
+    task = _spawn_task(_watch_atv_source(device_id, atv))
+    _source_watch_tasks[device_id] = task
+
+    def cleanup(completed: asyncio.Task[Any]) -> None:
+        if _source_watch_tasks.get(device_id) is completed:
+            _source_watch_tasks.pop(device_id, None)
+
+    task.add_done_callback(cleanup)
+
+
+def _cancel_source_watch(device_id: str) -> None:
+    """Cancel the foreground-app watcher for a removed Apple TV."""
+    task = _source_watch_tasks.pop(device_id, None)
+    if task and not task.done():
+        task.cancel()
 
 
 @api.listens_to(ucapi.Events.CONNECT)
@@ -154,6 +212,7 @@ async def on_unsubscribe_entities(entity_ids: list[str]) -> None:
         # only unsubscribe the device once all its entities are gone
         if device_id in _configured_atvs and not _get_entities(device_id):
             device = _configured_atvs.pop(device_id)
+            _cancel_source_watch(device_id)
             _LOG.info("Removed '%s' from configured devices and disconnect", device.name)
             await device.disconnect()
             device.events.remove_all_listeners()
@@ -237,6 +296,7 @@ def _add_configured_atv(device_config: config.AtvDevice, *, connect: bool = True
     # the device should not yet be configured, but better be safe
     if device_config.identifier in _configured_atvs:
         atv = _configured_atvs[device_config.identifier]
+        _ensure_source_watch(device_config.identifier, atv)
         _LOG.debug(
             "Updating existing ATV device: %s (%s) %s",
             device_config.name,
@@ -269,6 +329,7 @@ def _add_configured_atv(device_config: config.AtvDevice, *, connect: bool = True
     atv.events.on(tv.EVENTS.ERROR, on_atv_connection_error)
     atv.events.on(tv.EVENTS.UPDATE, on_atv_update)
     _configured_atvs[device_config.identifier] = atv
+    _ensure_source_watch(device_config.identifier, atv)
 
     if connect:
         # start background task
@@ -325,7 +386,8 @@ def on_device_removed(device: config.AtvDevice | None) -> None:
     """Handle a removed device in the configuration."""
     if device is None:
         _LOG.debug("Configuration cleared, disconnecting & removing all configured ATV instances")
-        for atv in _configured_atvs.values():
+        for device_id, atv in _configured_atvs.items():
+            _cancel_source_watch(device_id)
             _spawn_task(atv.disconnect())
             atv.events.remove_all_listeners()
         _configured_atvs.clear()
@@ -334,6 +396,7 @@ def on_device_removed(device: config.AtvDevice | None) -> None:
     elif device.identifier in _configured_atvs:
         _LOG.debug("Disconnecting from removed ATV %s", device.identifier)
         atv = _configured_atvs.pop(device.identifier)
+        _cancel_source_watch(device.identifier)
         _spawn_task(atv.disconnect())
         atv.events.remove_all_listeners()
         for entity in _get_entities(atv.identifier, include_all=True):
