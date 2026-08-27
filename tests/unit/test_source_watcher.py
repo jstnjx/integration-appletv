@@ -41,6 +41,6 @@ async def test_source_watcher_publishes_only_real_app_changes(monkeypatch: pytes
     await driver._watch_atv_source(DEVICE_ID, atv)  # type: ignore[arg-type]  # noqa: SLF001
 
     assert updates == [
-        (DEVICE_ID, {media_player.Attributes.SOURCE: "App_Store"}),
+        (DEVICE_ID, {media_player.Attributes.SOURCE: "App Store"}),
         (DEVICE_ID, {media_player.Attributes.SOURCE: "Netflix"}),
     ]
