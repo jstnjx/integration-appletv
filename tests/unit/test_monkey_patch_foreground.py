@@ -20,7 +20,7 @@ def _client(bundle_identifier: str, display_name: str, process_identifier: int) 
 def test_client_gets_shadow_foreground_flag() -> None:
     client = _client("com.netflix.Netflix", "Netflix", 101)
 
-    assert getattr(client, "_isForeground") is False
+    assert client.__dict__["_isForeground"] is False
 
 
 def test_promoting_foreground_client_clears_previous_client() -> None:
@@ -29,12 +29,12 @@ def test_promoting_foreground_client_clears_previous_client() -> None:
     manager = cast("Any", SimpleNamespace())
 
     assert monkey_patch._set_foreground_client(manager, netflix, "test") is True
-    assert getattr(netflix, "_isForeground") is True
+    assert netflix.__dict__["_isForeground"] is True
 
     assert monkey_patch._set_foreground_client(manager, youtube, "test") is True
-    assert getattr(netflix, "_isForeground") is False
-    assert getattr(youtube, "_isForeground") is True
-    assert getattr(manager, "_uc_foreground_client") is youtube
+    assert netflix.__dict__["_isForeground"] is False
+    assert youtube.__dict__["_isForeground"] is True
+    assert manager.__dict__["_uc_foreground_client"] is youtube
 
 
 def test_metadata_app_prefers_experimental_foreground_client() -> None:
