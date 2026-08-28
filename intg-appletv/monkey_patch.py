@@ -7,10 +7,10 @@ This module handles monkey patching of the pyatv library.
 """
 # pyright: reportPrivateUsage=false
 
-import logging
-import time
 from collections.abc import Awaitable, Callable
 from copy import copy
+import logging
+import time
 from typing import Any, cast
 
 from pyatv import exceptions
@@ -23,8 +23,7 @@ from pyatv.protocols.airplay.auth.legacy import AirPlayLegacyPairSetupProcedure
 from pyatv.protocols.airplay.pairing import AirPlayMajorVersion, AirPlayPairingHandler, AuthenticationType
 from pyatv.protocols.airplay.srp import LegacySRPAuthHandler, new_credentials
 from pyatv.protocols.mrp import MrpMetadata, protobuf as mrp_protobuf
-from pyatv.protocols.mrp.player_state import Client as MrpClient
-from pyatv.protocols.mrp.player_state import PlayerStateManager
+from pyatv.protocols.mrp.player_state import Client as MrpClient, PlayerStateManager
 from pyatv.support import error_handler
 from pyatv.support.http import HttpConnection, http_connect
 
