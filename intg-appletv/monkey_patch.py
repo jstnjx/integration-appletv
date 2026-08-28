@@ -7,10 +7,10 @@ This module handles monkey patching of the pyatv library.
 """
 # pyright: reportPrivateUsage=false
 
-from collections.abc import Awaitable, Callable
-from copy import copy
 import logging
 import time
+from collections.abc import Awaitable, Callable
+from copy import copy
 from typing import Any, cast
 
 from pyatv import exceptions
