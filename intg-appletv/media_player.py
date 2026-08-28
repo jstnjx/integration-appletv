@@ -19,6 +19,7 @@ from config import AtvDevice
 from entities import AppleTVEntity
 from hid import UsagePage
 from hid.consumer_control_code import ConsumerControlCode
+from selection_sync import run_synced_selection
 from tv import AppleTv
 from utils import filter_attributes, key_update_helper
 
@@ -296,9 +297,15 @@ class AppleTVMediaPlayer(MediaPlayer, AppleTVEntity):
             case Commands.CHANNEL_UP:
                 res = await self._device.channel_up()
             case Commands.SELECT_SOURCE:
-                if params is None:
+                source = _get_cmd_param("source", params)
+                if not isinstance(source, str):
                     return StatusCodes.BAD_REQUEST
-                res = await self._device.launch_app(params["source"])
+                res = await run_synced_selection(
+                    self._device,
+                    self._device.launch_app,
+                    Attributes.SOURCE.value,
+                    source,
+                )
             case Commands.GUIDE:
                 res = await self._device.toggle_guide()
             # --- simple commands ---
