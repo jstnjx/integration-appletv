@@ -46,11 +46,11 @@ _ORIGINAL_MRP_CLIENT_INIT = MrpClient.__init__
 _ORIGINAL_PSM_INIT = PlayerStateManager.__init__
 _ORIGINAL_PSM_HANDLE_UPDATE_CLIENT = cast(
     "Callable[[PlayerStateManager, Any], Awaitable[None]]",
-    getattr(PlayerStateManager, "_handle_update_client"),
+    cast("Any", PlayerStateManager)._handle_update_client,  # noqa: SLF001
 )
 _ORIGINAL_PSM_HANDLE_REMOVE_CLIENT = cast(
     "Callable[[PlayerStateManager, Any], Awaitable[None]]",
-    getattr(PlayerStateManager, "_handle_remove_client"),
+    cast("Any", PlayerStateManager)._handle_remove_client,  # noqa: SLF001
 )
 _ORIGINAL_MRP_METADATA_APP_GETTER = MrpMetadata.app.fget
 
@@ -166,27 +166,27 @@ async def patched_airplay_pairing_begin(self: AirPlayPairingHandler) -> None:
 def patched_mrp_client_init(self: MrpClient, client: Any) -> None:
     """Add a local shadow of MediaRemote's private `_isForeground` state to an MRP client."""
     _ORIGINAL_MRP_CLIENT_INIT(self, client)
-    setattr(self, _FOREGROUND_FLAG, False)
+    self.__dict__[_FOREGROUND_FLAG] = False
 
 
 def patched_mrp_player_state_manager_init(self: PlayerStateManager, protocol: Any) -> None:
     """Initialize experimental foreground tracking after pyatv initializes its normal MRP state."""
     _ORIGINAL_PSM_INIT(self, protocol)
-    setattr(self, _FOREGROUND_CLIENT, None)
-    setattr(self, _FOREGROUND_READY_AT, time.monotonic() + _FOREGROUND_BOOTSTRAP_SECONDS)
+    self.__dict__[_FOREGROUND_CLIENT] = None
+    self.__dict__[_FOREGROUND_READY_AT] = time.monotonic() + _FOREGROUND_BOOTSTRAP_SECONDS
 
 
 def _set_foreground_client(manager: PlayerStateManager, client: MrpClient, reason: str) -> bool:
     """Promote one MRP client to the local foreground slot and clear the previous flag."""
-    current = cast("MrpClient | None", getattr(manager, _FOREGROUND_CLIENT, None))
-    if current is client and bool(getattr(client, _FOREGROUND_FLAG, False)):
+    current = cast("MrpClient | None", manager.__dict__.get(_FOREGROUND_CLIENT))
+    if current is client and bool(client.__dict__.get(_FOREGROUND_FLAG, False)):
         return False
 
     if current is not None:
-        setattr(current, _FOREGROUND_FLAG, False)
+        current.__dict__[_FOREGROUND_FLAG] = False
 
-    setattr(client, _FOREGROUND_FLAG, True)
-    setattr(manager, _FOREGROUND_CLIENT, client)
+    client.__dict__[_FOREGROUND_FLAG] = True
+    manager.__dict__[_FOREGROUND_CLIENT] = client
     _LOG.info(
         "Experimental MRP foreground app: %s (%s), reason=%s",
         client.display_name or "unknown",
@@ -198,7 +198,7 @@ def _set_foreground_client(manager: PlayerStateManager, client: MrpClient, reaso
 
 async def _force_mrp_state_update(manager: PlayerStateManager) -> None:
     """Force pyatv's push updater to rebuild metadata after a foreground-only change."""
-    state_updated = cast("Callable[..., Awaitable[Any]]", getattr(manager, "_state_updated"))
+    state_updated = cast("Callable[..., Awaitable[Any]]", cast("Any", manager)._state_updated)  # noqa: SLF001
     await state_updated()
 
 
@@ -213,7 +213,7 @@ async def patched_mrp_handle_update_client(self: PlayerStateManager, message: An
 
     await _ORIGINAL_PSM_HANDLE_UPDATE_CLIENT(self, message)
 
-    ready_at = float(getattr(self, _FOREGROUND_READY_AT, 0.0))
+    ready_at = float(self.__dict__.get(_FOREGROUND_READY_AT, 0.0))
     bootstrap = time.monotonic() < ready_at
     _LOG.debug(
         "Experimental MRP client update: app=%s bundle=%s pid=%s nowPlayingVisibility=%s bootstrap=%s",
@@ -237,23 +237,23 @@ async def patched_mrp_handle_update_client(self: PlayerStateManager, message: An
 async def patched_mrp_handle_remove_client(self: PlayerStateManager, message: Any) -> None:
     """Clear the experimental foreground slot when that MRP client is removed."""
     client_to_remove = mrp_protobuf.extract_inner(message).client
-    foreground = cast("MrpClient | None", getattr(self, _FOREGROUND_CLIENT, None))
+    foreground = cast("MrpClient | None", self.__dict__.get(_FOREGROUND_CLIENT))
     removed_foreground = foreground is not None and foreground.bundle_identifier == client_to_remove.bundleIdentifier
 
     await _ORIGINAL_PSM_HANDLE_REMOVE_CLIENT(self, message)
 
     if removed_foreground and foreground is not None:
-        setattr(foreground, _FOREGROUND_FLAG, False)
-        setattr(self, _FOREGROUND_CLIENT, None)
+        foreground.__dict__[_FOREGROUND_FLAG] = False
+        self.__dict__[_FOREGROUND_CLIENT] = None
         _LOG.info("Experimental MRP foreground app removed: %s", client_to_remove.bundleIdentifier)
         await _force_mrp_state_update(self)
 
 
 def patched_mrp_metadata_app(self: MrpMetadata) -> App | None:
     """Prefer the experimental foreground client, otherwise retain pyatv's normal Now Playing app behavior."""
-    manager = cast("PlayerStateManager", getattr(self, "psm"))
-    foreground = cast("MrpClient | None", getattr(manager, _FOREGROUND_CLIENT, None))
-    if foreground is not None and bool(getattr(foreground, _FOREGROUND_FLAG, False)):
+    manager = self.psm
+    foreground = cast("MrpClient | None", manager.__dict__.get(_FOREGROUND_CLIENT))
+    if foreground is not None and bool(foreground.__dict__.get(_FOREGROUND_FLAG, False)):
         return App(foreground.display_name, foreground.bundle_identifier)
 
     if _ORIGINAL_MRP_METADATA_APP_GETTER is None:
@@ -267,11 +267,11 @@ def apply_mrp_foreground_app_patch() -> None:
     if _MRP_FOREGROUND_PATCH_APPLIED:
         return
 
-    setattr(MrpClient, "__init__", patched_mrp_client_init)
-    setattr(PlayerStateManager, "__init__", patched_mrp_player_state_manager_init)
-    setattr(PlayerStateManager, "_handle_update_client", patched_mrp_handle_update_client)
-    setattr(PlayerStateManager, "_handle_remove_client", patched_mrp_handle_remove_client)
-    setattr(MrpMetadata, "app", property(patched_mrp_metadata_app))
+    cast("Any", MrpClient).__init__ = patched_mrp_client_init
+    cast("Any", PlayerStateManager).__init__ = patched_mrp_player_state_manager_init
+    cast("Any", PlayerStateManager)._handle_update_client = patched_mrp_handle_update_client  # noqa: SLF001
+    cast("Any", PlayerStateManager)._handle_remove_client = patched_mrp_handle_remove_client  # noqa: SLF001
+    cast("Any", MrpMetadata).app = property(patched_mrp_metadata_app)
     _MRP_FOREGROUND_PATCH_APPLIED = True
     _LOG.warning(
         "Enabled experimental pyatv MRP foreground-app patch; `_isForeground` is inferred from post-bootstrap client "
