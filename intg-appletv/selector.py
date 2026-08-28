@@ -18,6 +18,7 @@ from ucapi.select import Attributes, Commands, Select, States
 
 from config import AtvDevice, create_entity_id
 from entities import AppleTVEntity
+from selection_sync import run_synced_selection
 import tv
 
 _LOG = logging.getLogger(__name__)
@@ -126,6 +127,15 @@ class AppleTVSelect(Select, AppleTVEntity):
             attributes.setdefault(Attributes.STATE, States.ON)
         return attributes
 
+    async def _select_option(self, option: str) -> StatusCodes:
+        """Select an option and synchronize every entity backed by the same attribute."""
+        return await run_synced_selection(
+            self._device,
+            self._select_handler,
+            self._SELECT_CURRENT_ATTRIBUTE,
+            option,
+        )
+
     @override
     async def command(
         self,
@@ -149,12 +159,12 @@ class AppleTVSelect(Select, AppleTVEntity):
             option = params.get("option", None)
             if option is None:
                 return StatusCodes.BAD_REQUEST
-            return await self._select_handler(option)
+            return await self._select_option(option)
         options = self.select_options
         if cmd_id == Commands.SELECT_FIRST and len(options) > 0:
-            return await self._select_handler(options[0])
+            return await self._select_option(options[0])
         if cmd_id == Commands.SELECT_LAST and len(options) > 0:
-            return await self._select_handler(options[len(options) - 1])
+            return await self._select_option(options[len(options) - 1])
         if cmd_id == Commands.SELECT_NEXT and len(options) > 0:
             cycle = params.get("cycle", True) if params else True
             try:
@@ -163,7 +173,7 @@ class AppleTVSelect(Select, AppleTVEntity):
                     return StatusCodes.OK
                 if index >= len(options):
                     index = 0
-                return await self._select_handler(options[index])
+                return await self._select_option(options[index])
             except ValueError as ex:
                 _LOG.warning(
                     "[%s] Invalid option %s in list %s %s",
@@ -181,7 +191,7 @@ class AppleTVSelect(Select, AppleTVEntity):
                     return StatusCodes.OK
                 if index < 0:
                     index = len(options) - 1
-                return await self._select_handler(options[index])
+                return await self._select_option(options[index])
             except ValueError as ex:
                 _LOG.warning(
                     "[%s] Invalid option %s in list %s %s",
