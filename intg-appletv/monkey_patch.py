@@ -273,8 +273,9 @@ def apply_mrp_foreground_app_patch() -> None:
     cast("Any", MrpMetadata).app = property(patched_mrp_metadata_app)
     _MRP_FOREGROUND_PATCH_APPLIED = True
     _LOG.warning(
-        "Enabled experimental pyatv MRP foreground-app patch; `_isForeground` is inferred from post-bootstrap client "
-        "updates and is not read directly from tvOS MediaRemote memory"
+        "%s%s",
+        "Enabled experimental pyatv MRP foreground-app patch; `_isForeground` is inferred from post-bootstrap client ",
+        "updates and is not read directly from tvOS MediaRemote memory",
     )
 
 
