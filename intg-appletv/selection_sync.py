@@ -62,14 +62,16 @@ def _existing_states(device: tv.AppleTv) -> dict[str, _SelectionState] | None:
 
 def _raw_app_name(device: tv.AppleTv) -> str:
     """Read pyatv's unmodified app/Now Playing value."""
-    if isinstance(device, tv.AppleTv):
-        original = getattr(cast("Any", tv.AppleTv), _ORIGINAL_APP_NAME_ATTR, None)
-        if isinstance(original, property) and original.fget is not None:
-            try:
-                return str(original.fget(device) or "")
-            except Exception:  # noqa: BLE001 - mirror the resilient app_name property
-                _LOG.debug("[%s] Failed to read raw app name", device.log_id, exc_info=True)
-                return ""
+    original = getattr(cast("Any", tv.AppleTv), _ORIGINAL_APP_NAME_ATTR, None)
+    if isinstance(original, property) and original.fget is not None:
+        try:
+            return str(original.fget(device) or "")
+        except Exception:  # noqa: BLE001 - test doubles and resilient runtime fallback
+            _LOG.debug(
+                "[%s] Failed to read raw app name",
+                getattr(device, "log_id", getattr(device, "identifier", "Apple TV")),
+                exc_info=True,
+            )
     return str(getattr(cast("Any", device), "app_name", "") or "")
 
 
