@@ -10,15 +10,32 @@ from enum import StrEnum
 import logging
 from typing import Any, cast
 
-from pyatv.const import PowerState
+from pyatv.const import KeyboardFocusState, PowerState
 from typing_extensions import override
 from ucapi import IntegrationAPI, RepeatMode, StatusCodes
-from ucapi.media_player import Attributes, Commands, DeviceClasses, Features, MediaPlayer, Options, States
+from ucapi.api_definitions import Pagination
+from ucapi.media_player import (
+    Attributes,
+    BrowseMediaItem,
+    BrowseOptions,
+    BrowseResults,
+    Commands,
+    DeviceClasses,
+    Features,
+    MediaClass,
+    MediaPlayer,
+    Options,
+    SearchMediaItem,
+    SearchOptions,
+    SearchResults,
+    States,
+)
 
 from config import AtvDevice
 from entities import AppleTVEntity
 from hid import UsagePage
 from hid.consumer_control_code import ConsumerControlCode
+from keyboard_input import current_focus as keyboard_current_focus, set_text as keyboard_set_text
 from selection_sync import run_synced_selection
 from tv import AppleTv
 from utils import filter_attributes, key_update_helper
@@ -132,6 +149,8 @@ class AppleTVMediaPlayer(MediaPlayer, AppleTVEntity):
             Features.SELECT_SOUND_MODE,
             Features.SEEK,
             Features.GUIDE,
+            Features.BROWSE_MEDIA,
+            Features.SEARCH_MEDIA,
         ]
         if ENABLE_REPEAT_FEAT:
             features.append(Features.REPEAT)
@@ -155,6 +174,119 @@ class AppleTVMediaPlayer(MediaPlayer, AppleTVEntity):
     def state_from_media_player_state(self, state: States) -> States:
         """Map media-player state. Pass through state."""
         return state
+
+    @staticmethod
+    def _pagination(page: int, limit: int, count: int) -> Pagination:
+        """Create media-browser pagination metadata."""
+        return Pagination(page=page, limit=limit, count=count)
+
+    @override
+    async def browse(self, options: BrowseOptions) -> BrowseResults | StatusCodes:
+        """Expose the media browser as an Apple TV keyboard input surface."""
+        focus, status = await keyboard_current_focus(self._device.device_config)
+
+        if status in (StatusCodes.SERVICE_UNAVAILABLE, StatusCodes.TIMEOUT):
+            title = "Apple TV unavailable"
+            subtitle = "Check that the Apple TV is online and reachable."
+        elif status == StatusCodes.UNAUTHORIZED:
+            title = "Keyboard authentication failed"
+            subtitle = "Reconfigure the Apple TV integration to refresh Companion credentials."
+        elif status == StatusCodes.NOT_IMPLEMENTED:
+            title = "Keyboard unavailable"
+            subtitle = "This Apple TV does not expose Companion keyboard input."
+        elif status != StatusCodes.OK:
+            title = "Keyboard unavailable"
+            subtitle = "The Apple TV keyboard state could not be read."
+        elif focus == KeyboardFocusState.Focused:
+            title = "Keyboard ready"
+            subtitle = "Tap Search above and type. The full text is sent to Apple TV."
+        elif focus == KeyboardFocusState.Unfocused:
+            title = "Open a text field on Apple TV"
+            subtitle = "Search input is only forwarded while tvOS keyboard focus is active."
+        else:
+            title = "Waiting for keyboard focus"
+            subtitle = "Open a search or text field on Apple TV, then type here."
+
+        status_item = BrowseMediaItem(
+            media_id="keyboard-status",
+            title=title,
+            subtitle=subtitle,
+            media_class=MediaClass.DIRECTORY,
+            media_type="keyboard_status",
+            can_browse=False,
+            can_play=False,
+            can_search=False,
+        )
+        root = BrowseMediaItem(
+            media_id="keyboard-root",
+            title="Apple TV Keyboard",
+            media_class=MediaClass.DIRECTORY,
+            media_type="keyboard",
+            can_browse=False,
+            can_play=False,
+            can_search=True,
+            items=[status_item],
+        )
+        return BrowseResults(
+            media=root,
+            pagination=self._pagination(
+                options.paging.page,
+                options.paging.limit,
+                1,
+            ),
+        )
+
+    @override
+    async def search(self, options: SearchOptions) -> SearchResults | StatusCodes:
+        """Forward a media-search query to the focused tvOS text field."""
+        query = options.query.strip()
+        if not query:
+            return SearchResults(
+                media=[],
+                pagination=self._pagination(
+                    options.paging.page,
+                    options.paging.limit,
+                    0,
+                ),
+            )
+
+        status = await keyboard_set_text(self._device.device_config, query)
+        if status == StatusCodes.OK:
+            title = f"Sent: {query[:220]}"
+            subtitle = "Text sent to Apple TV"
+            media_id = "keyboard-sent"
+        else:
+            title = "Text not sent"
+            media_id = "keyboard-not-sent"
+            if status == StatusCodes.BAD_REQUEST:
+                subtitle = "Apple TV keyboard is not focused"
+            elif status in (StatusCodes.SERVICE_UNAVAILABLE, StatusCodes.TIMEOUT):
+                subtitle = "Apple TV is unavailable"
+            elif status == StatusCodes.UNAUTHORIZED:
+                subtitle = "Apple TV Companion authentication failed"
+            elif status == StatusCodes.NOT_IMPLEMENTED:
+                subtitle = "Apple TV keyboard input is not available"
+            else:
+                subtitle = "Could not send text to Apple TV"
+
+        item = SearchMediaItem(
+            media_id=media_id,
+            title=title,
+            subtitle=subtitle,
+            media_class=MediaClass.DIRECTORY,
+            media_type="keyboard_status",
+            can_browse=False,
+            can_play=False,
+            can_search=False,
+        )
+        return SearchResults(
+            media=[item],
+            pagination=self._pagination(
+                options.paging.page,
+                options.paging.limit,
+                1,
+            ),
+        )
 
     async def _playpause_in_screensaver(self) -> StatusCodes | None:
         """
