@@ -35,8 +35,7 @@ from config import AtvDevice
 from entities import AppleTVEntity
 from hid import UsagePage
 from hid.consumer_control_code import ConsumerControlCode
-from keyboard_input import current_focus as keyboard_current_focus
-from keyboard_input import set_text as keyboard_set_text
+from keyboard_input import current_focus as keyboard_current_focus, set_text as keyboard_set_text
 from selection_sync import run_synced_selection
 from tv import AppleTv
 from utils import filter_attributes, key_update_helper
