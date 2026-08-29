@@ -51,6 +51,7 @@ from ucapi import StatusCodes
 from ucapi.media_player import Attributes as MediaAttr, MediaContentType, RepeatMode, States as MediaState
 
 from config import AtvDevice, AtvProtocol
+from media_styling import DEFAULT_MEDIA_ARTIST_STYLE, DEFAULT_MEDIA_TITLE_STYLE, apply_media_text_style
 from utils import replace_bad_chars
 
 _LOG = logging.getLogger(__name__)
@@ -406,6 +407,26 @@ class AppleTv(interface.AudioListener, interface.DeviceListener):
         return list(self._app_list.keys())
 
     @property
+    def media_title(self) -> str:
+        """Return the media title formatted for Remote UI when styling is enabled."""
+        return apply_media_text_style(
+            self._media_title,
+            enabled=self._device.media_styling,
+            template=self._device.media_title_style,
+            fallback_template=DEFAULT_MEDIA_TITLE_STYLE,
+        )
+
+    @property
+    def media_artist(self) -> str:
+        """Return the media artist formatted for Remote UI when styling is enabled."""
+        return apply_media_text_style(
+            self._media_artist,
+            enabled=self._device.media_styling,
+            template=self._device.media_artist_style,
+            fallback_template=DEFAULT_MEDIA_ARTIST_STYLE,
+        )
+
+    @property
     def attributes(self) -> dict[str, Any]:
         """Return device attributes."""
         return {
@@ -414,9 +435,9 @@ class AppleTv(interface.AudioListener, interface.DeviceListener):
             MediaAttr.VOLUME: self._volume_level,
             MediaAttr.MEDIA_TYPE: self.media_content_type,
             MediaAttr.MEDIA_IMAGE_URL: self._media_image_url or "",
-            MediaAttr.MEDIA_TITLE: self._media_title or "",
+            MediaAttr.MEDIA_TITLE: self.media_title,
             MediaAttr.MEDIA_ALBUM: self._media_album or "",
-            MediaAttr.MEDIA_ARTIST: self._media_artist or "",
+            MediaAttr.MEDIA_ARTIST: self.media_artist,
             MediaAttr.MEDIA_POSITION: self._media_position or 0,
             MediaAttr.MEDIA_DURATION: self._media_duration or 0,
             MediaAttr.MEDIA_POSITION_UPDATED_AT: (self.media_position_updated_at or ""),
@@ -805,8 +826,17 @@ class AppleTv(interface.AudioListener, interface.DeviceListener):
         """
         if not device.credentials:
             device.credentials = []
+        previous_title = self.media_title
+        previous_artist = self.media_artist
         self._device = device
         self._apple_tv_conf = None
+        metadata_update: dict[MediaAttr, Any] = {}
+        if self.media_title != previous_title:
+            metadata_update[MediaAttr.MEDIA_TITLE] = self.media_title
+        if self.media_artist != previous_artist:
+            metadata_update[MediaAttr.MEDIA_ARTIST] = self.media_artist
+        if metadata_update:
+            self.events.emit(EVENTS.UPDATE, self._device.identifier, metadata_update)
 
     async def _start_polling(self) -> None:
         if self._atv is None:
@@ -836,12 +866,12 @@ class AppleTv(interface.AudioListener, interface.DeviceListener):
             raw_title = raw_title.removeprefix("(null):").strip()
         if raw_title != self._media_title:
             self._media_title = raw_title
-            update[MediaAttr.MEDIA_TITLE] = raw_title
+            update[MediaAttr.MEDIA_TITLE] = self.media_title
 
         raw_artist = data.artist or ""
         if raw_artist != self._media_artist:
             self._media_artist = raw_artist
-            update[MediaAttr.MEDIA_ARTIST] = raw_artist
+            update[MediaAttr.MEDIA_ARTIST] = self.media_artist
 
         raw_album = data.album or ""
         if raw_album != self._media_album:

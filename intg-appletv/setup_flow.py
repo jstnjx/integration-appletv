@@ -31,6 +31,7 @@ import config
 from config import AtvDevice, AtvProtocol
 import discover
 from i18n import __, _a, _af, _am
+from media_styling import DEFAULT_MEDIA_ARTIST_STYLE, DEFAULT_MEDIA_TITLE_STYLE, normalize_media_style_template
 import tv
 
 _LOG = logging.getLogger(__name__)
@@ -234,7 +235,9 @@ async def _handle_driver_setup(msg: DriverSetupRequest) -> RequestUserInput | Se
     return __user_input_discovery()
 
 
-async def _handle_configuration_mode(msg: UserDataResponse) -> RequestUserInput | SetupComplete | SetupError:
+async def _handle_configuration_mode(  # noqa: PLR0915
+    msg: UserDataResponse,
+) -> RequestUserInput | SetupComplete | SetupError:
     """
     Process user data response from the configuration mode screen.
 
@@ -309,6 +312,13 @@ async def _handle_configuration_mode(msg: UserDataResponse) -> RequestUserInput 
             mac_address = selected_device.mac_address or ""
             address = selected_device.address or ""
             global_volume = selected_device.global_volume if selected_device.global_volume is not None else True
+            media_styling = selected_device.media_styling
+            media_title_style = normalize_media_style_template(
+                selected_device.media_title_style, DEFAULT_MEDIA_TITLE_STYLE
+            )
+            media_artist_style = normalize_media_style_template(
+                selected_device.media_artist_style, DEFAULT_MEDIA_ARTIST_STYLE
+            )
 
             return RequestUserInput(
                 _af("Configure your Apple TV (configured mac address {mac_address})", mac_address=mac_address),
@@ -329,6 +339,11 @@ async def _handle_configuration_mode(msg: UserDataResponse) -> RequestUserInput 
                         "label": _a("IP address (optional)"),
                     },
                     __global_volume(enabled=global_volume),
+                    *__media_styling(
+                        enabled=media_styling,
+                        title_style=media_title_style,
+                        artist_style=media_artist_style,
+                    ),
                 ],
             )
 
@@ -408,6 +423,11 @@ async def _handle_discovery(msg: UserDataResponse) -> RequestUserInput | SetupEr
                 "label": _a("Choose your Apple TV"),
             },
             __global_volume(enabled=True),
+            *__media_styling(
+                enabled=False,
+                title_style=DEFAULT_MEDIA_TITLE_STYLE,
+                artist_style=DEFAULT_MEDIA_ARTIST_STYLE,
+            ),
         ],
     )
 
@@ -425,7 +445,14 @@ async def _handle_device_choice(msg: UserDataResponse) -> RequestUserInput | Req
     global _setup_step
 
     choice = msg.input_values["choice"]
-    global_volume = msg.input_values.get("global_volume", "true") == "true"
+    global_volume = _checkbox_enabled(msg.input_values.get("global_volume"), default=True)
+    media_styling = _checkbox_enabled(msg.input_values.get("media_styling"), default=False)
+    media_title_style = normalize_media_style_template(
+        msg.input_values.get("media_title_style"), DEFAULT_MEDIA_TITLE_STYLE
+    )
+    media_artist_style = normalize_media_style_template(
+        msg.input_values.get("media_artist_style"), DEFAULT_MEDIA_ARTIST_STYLE
+    )
 
     atv = _discovered_atv_from_identifier(choice)
     if atv is None:
@@ -453,6 +480,9 @@ async def _handle_device_choice(msg: UserDataResponse) -> RequestUserInput | Req
             address=str(atv.address) if _manual_address else None,
             mac_address=choice,
             global_volume=global_volume,
+            media_styling=media_styling,
+            media_title_style=media_title_style,
+            media_artist_style=media_artist_style,
         ),
         loop=asyncio.get_event_loop(),
         pairing_atv=atv,
@@ -573,6 +603,9 @@ async def _handle_user_data_companion_pin(msg: UserDataResponse) -> SetupComplet
         address=_pairing_apple_tv.address,
         mac_address=_pairing_apple_tv.identifier,
         global_volume=_pairing_apple_tv.device_config.global_volume,
+        media_styling=_pairing_apple_tv.device_config.media_styling,
+        media_title_style=_pairing_apple_tv.device_config.media_title_style,
+        media_artist_style=_pairing_apple_tv.device_config.media_artist_style,
     )
     config.get_devices().add_or_update(device)  # triggers ATV instance creation
 
@@ -598,7 +631,14 @@ async def _handle_device_reconfigure(msg: UserDataResponse) -> SetupComplete | S
 
     mac_address = msg.input_values["mac_address"]
     manual_mac_address = msg.input_values["manual_mac_address"]
-    global_volume = msg.input_values.get("global_volume", "true") == "true"
+    global_volume = _checkbox_enabled(msg.input_values.get("global_volume"), default=True)
+    media_styling = _checkbox_enabled(msg.input_values.get("media_styling"), default=False)
+    media_title_style = normalize_media_style_template(
+        msg.input_values.get("media_title_style"), DEFAULT_MEDIA_TITLE_STYLE
+    )
+    media_artist_style = normalize_media_style_template(
+        msg.input_values.get("media_artist_style"), DEFAULT_MEDIA_ARTIST_STYLE
+    )
 
     if mac_address == "" and manual_mac_address == "":
         _LOG.error("MAC address is mandatory, no changes applied")
@@ -613,6 +653,9 @@ async def _handle_device_reconfigure(msg: UserDataResponse) -> SetupComplete | S
     _reconfigured_device.mac_address = mac_address
     _reconfigured_device.address = address
     _reconfigured_device.global_volume = global_volume
+    _reconfigured_device.media_styling = media_styling
+    _reconfigured_device.media_title_style = media_title_style
+    _reconfigured_device.media_artist_style = media_artist_style
 
     config.get_devices().add_or_update(_reconfigured_device)  # triggers ATV instance update
 
@@ -663,6 +706,48 @@ def __user_input_discovery() -> RequestUserInput:
             },
         ],
     )
+
+
+def _checkbox_enabled(value: Any, *, default: bool) -> bool:
+    """Convert setup checkbox values from bool or string representation."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).casefold() == "true"
+
+
+def __media_styling(*, enabled: bool, title_style: str, artist_style: str) -> list[dict[str, Any]]:
+    """Build optional Remote UI rich-text metadata styling setup fields."""
+    return [
+        {
+            "id": "media_styling",
+            "label": _a("Style media title and artist"),
+            "field": {"checkbox": {"value": enabled}},
+        },
+        {
+            "id": "media_styling_info",
+            "label": _a("Media text styling"),
+            "field": {
+                "label": {
+                    "value": _a(
+                        "Use {text} for the title or artist. Supported rich-text tags include "
+                        + "b, i, u, strong, and font color with a quoted #RRGGBB value."
+                    )
+                }
+            },
+        },
+        {
+            "id": "media_title_style",
+            "label": _a("Media title style"),
+            "field": {"text": {"value": title_style}},
+        },
+        {
+            "id": "media_artist_style",
+            "label": _a("Media artist style"),
+            "field": {"text": {"value": artist_style}},
+        },
+    ]
 
 
 def __global_volume(*, enabled: bool) -> dict[str, Any]:

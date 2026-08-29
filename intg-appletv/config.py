@@ -22,6 +22,7 @@ from typing_extensions import override
 from ucapi import EntityTypes
 
 import discover
+from media_styling import DEFAULT_MEDIA_ARTIST_STYLE, DEFAULT_MEDIA_TITLE_STYLE, normalize_media_style_template
 
 _LOG = logging.getLogger(__name__)
 
@@ -51,6 +52,12 @@ class AtvDevice:
     """Actual identifier of the device, which can change over time."""
     global_volume: bool | None = True
     """Change volume on all connected devices."""
+    media_styling: bool = False
+    """Enable Remote UI rich-text styling for media title and artist."""
+    media_title_style: str = DEFAULT_MEDIA_TITLE_STYLE
+    """Qt rich-text template for media title. Must contain ``{text}``."""
+    media_artist_style: str = DEFAULT_MEDIA_ARTIST_STYLE
+    """Qt rich-text template for media artist. Must contain ``{text}``."""
 
 
 class _EnhancedJSONEncoder(json.JSONEncoder):
@@ -136,6 +143,11 @@ class Devices:
         for i, item in enumerate(self._config):
             if item.identifier == atv.identifier:
                 atv.global_volume = atv.global_volume if atv.global_volume is not None else True
+                atv.media_styling = bool(atv.media_styling)
+                atv.media_title_style = normalize_media_style_template(atv.media_title_style, DEFAULT_MEDIA_TITLE_STYLE)
+                atv.media_artist_style = normalize_media_style_template(
+                    atv.media_artist_style, DEFAULT_MEDIA_ARTIST_STYLE
+                )
                 # Replace wholesale so mac_address / credentials (and everything else) are updated too,
                 # not just address / name / global_volume.
                 self._config[i] = atv
@@ -202,6 +214,9 @@ class Devices:
                     item.get("address"),
                     item.get("mac_address"),
                     item.get("global_volume", True),
+                    bool(item.get("media_styling", False)),
+                    normalize_media_style_template(item.get("media_title_style"), DEFAULT_MEDIA_TITLE_STYLE),
+                    normalize_media_style_template(item.get("media_artist_style"), DEFAULT_MEDIA_ARTIST_STYLE),
                 )
                 self._config.append(atv)
             return True
