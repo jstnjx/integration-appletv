@@ -14,13 +14,16 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import logging
+from typing import TYPE_CHECKING
 
 import pyatv
 from pyatv.const import KeyboardFocusState, Protocol
-from pyatv.interface import AppleTV, BaseConfig
 from ucapi import StatusCodes
 
 from config import AtvDevice, AtvProtocol
+
+if TYPE_CHECKING:
+    from pyatv.interface import AppleTV, BaseConfig
 
 _LOG = logging.getLogger(__name__)
 _SCAN_TIMEOUT = 5
