@@ -1,0 +1,392 @@
+name: Temporary setup resilience patch
+
+on:
+  push:
+    branches:
+      - feat/media-metadata-styling
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.11'
+      - name: Apply setup resilience patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one match, found {count}: {old[:120]!r}')
+              file.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          # Contain all setup-flow exceptions and translate pyatv/network failures into UC setup errors.
+          replace_once(
+              'intg-appletv/setup_flow.py',
+              '''async def driver_setup_handler(msg: SetupDriver) -> SetupAction:
+              """
+              Dispatch driver setup requests to corresponding handlers.
+
+              Either start the setup process or handle the selected Apple TV device.
+
+              :param msg: the setup driver request object, either DriverSetupRequest or UserDataResponse
+              :return: the setup action on how to continue
+              """
+              global _setup_step
+              global _cfg_add_device
+              global _pairing_apple_tv
+
+              if isinstance(msg, DriverSetupRequest):
+                  _setup_step = SetupSteps.INIT
+                  _cfg_add_device = False
+                  return await _handle_driver_setup(msg)
+
+              if isinstance(msg, UserDataResponse):
+                  _LOG.debug("%s", msg)
+                  match _setup_step:
+                      case SetupSteps.CONFIGURATION_MODE if "action" in msg.input_values:
+                          return await _handle_configuration_mode(msg)
+                      case SetupSteps.DISCOVER if "address" in msg.input_values:
+                          return await _handle_discovery(msg)
+                      case SetupSteps.DEVICE_CHOICE if "choice" in msg.input_values:
+                          return await _handle_device_choice(msg)
+                      case SetupSteps.PAIRING_AIRPLAY if "pin_airplay" in msg.input_values:
+                          return await _handle_user_data_airplay_pin(msg)
+                      case SetupSteps.PAIRING_COMPANION if "pin_companion" in msg.input_values:
+                          return await _handle_user_data_companion_pin(msg)
+                      case SetupSteps.RECONFIGURE:
+                          return await _handle_device_reconfigure(msg)
+                      case _:
+                          pass
+                  _LOG.error("No or invalid user response was received: %s", msg)
+              elif isinstance(msg, AbortDriverSetup):
+                  _LOG.info("Setup was aborted with code: %s", msg.error)
+                  if _pairing_apple_tv is not None:
+                      await _pairing_apple_tv.disconnect()
+                      _pairing_apple_tv = None
+                  _setup_step = SetupSteps.INIT
+
+              # user confirmation not used in setup process
+              # if isinstance(msg, UserConfirmationResponse):
+              #     return handle_user_confirmation(msg)
+
+              return SetupError()
+          ''',
+              '''async def driver_setup_handler(msg: SetupDriver) -> SetupAction:
+              """
+              Dispatch driver setup requests to corresponding handlers.
+
+              Setup is a user-facing transaction. No pyatv/network exception should be
+              allowed to escape this callback because an uncaught exception can abort the
+              Integration-API setup task and surface to the Remote as a refused connection.
+              """
+              global _setup_step
+              global _cfg_add_device
+              global _pairing_apple_tv
+
+              try:
+                  if isinstance(msg, DriverSetupRequest):
+                      _setup_step = SetupSteps.INIT
+                      _cfg_add_device = False
+                      return await _handle_driver_setup(msg)
+
+                  if isinstance(msg, UserDataResponse):
+                      _LOG.debug("%s", msg)
+                      match _setup_step:
+                          case SetupSteps.CONFIGURATION_MODE if "action" in msg.input_values:
+                              return await _handle_configuration_mode(msg)
+                          case SetupSteps.DISCOVER if "address" in msg.input_values:
+                              return await _handle_discovery(msg)
+                          case SetupSteps.DEVICE_CHOICE if "choice" in msg.input_values:
+                              return await _handle_device_choice(msg)
+                          case SetupSteps.PAIRING_AIRPLAY if "pin_airplay" in msg.input_values:
+                              return await _handle_user_data_airplay_pin(msg)
+                          case SetupSteps.PAIRING_COMPANION if "pin_companion" in msg.input_values:
+                              return await _handle_user_data_companion_pin(msg)
+                          case SetupSteps.RECONFIGURE:
+                              return await _handle_device_reconfigure(msg)
+                          case _:
+                              pass
+                      _LOG.error("No or invalid user response was received: %s", msg)
+                  elif isinstance(msg, AbortDriverSetup):
+                      _LOG.info("Setup was aborted with code: %s", msg.error)
+                      if _pairing_apple_tv is not None:
+                          await _pairing_apple_tv.disconnect()
+                          _pairing_apple_tv = None
+                      _setup_step = SetupSteps.INIT
+
+                  return SetupError()
+              except (TimeoutError, pyatv.exceptions.OperationTimeoutError) as err:
+                  _LOG.exception("Apple TV setup timed out: %s", err)
+                  return SetupError(error_type=IntegrationSetupError.TIMEOUT)
+              except (
+                  ConnectionRefusedError,
+                  ConnectionError,
+                  OSError,
+                  pyatv.exceptions.ConnectionFailedError,
+                  pyatv.exceptions.ConnectionLostError,
+              ) as err:
+                  _LOG.exception("Apple TV setup connection failed: %s", err)
+                  return SetupError(error_type=IntegrationSetupError.CONNECTION_REFUSED)
+              except (
+                  pyatv.exceptions.AuthenticationError,
+                  pyatv.exceptions.NoCredentialsError,
+                  pyatv.exceptions.InvalidCredentialsError,
+              ) as err:
+                  _LOG.exception("Apple TV setup authentication failed: %s", err)
+                  return SetupError(error_type=IntegrationSetupError.AUTHORIZATION_ERROR)
+              except Exception as err:  # noqa: BLE001
+                  _LOG.exception("Unexpected Apple TV setup failure: %s", err)
+                  return SetupError(error_type=IntegrationSetupError.OTHER)
+          ''',
+          )
+
+          # Retry a refused pairing begin once after refreshing the discovered Apple TV config.
+          replace_once(
+              'intg-appletv/tv.py',
+              '''    async def start_pairing(self, protocol: Protocol, name: str) -> int | None:
+                  """Start the pairing process with the Apple TV."""
+                  if not self._pairing_atv:
+                      _LOG.error("[%s] Pairing requires initialized ATV device!", self.log_id)
+                      return None
+
+                  _LOG.debug("[%s] Pairing started", self.log_id)
+                  self._pairing_process = await pyatv.pair(self._pairing_atv, protocol, self._loop, name=name)
+                  await self._pairing_process.begin()
+
+                  if self._pairing_process.device_provides_pin:
+                      _LOG.debug("[%s] Device provides PIN", self.log_id)
+                      return 0
+
+                  _LOG.debug("[%s] We provide PIN", self.log_id)
+                  pin = random.randint(1000, 9999)  # noqa: S311  # not security-sensitive, used as ATV pairing prompt
+                  self._pairing_process.pin(pin)
+                  return pin
+          ''',
+              '''    async def _close_pairing_process(self) -> None:
+                  """Close and clear an in-progress pairing handler without masking the original error."""
+                  pairing = self._pairing_process
+                  self._pairing_process = None
+                  if pairing is None:
+                      return
+                  try:
+                      await pairing.close()
+                  except Exception as err:  # noqa: BLE001
+                      _LOG.debug("[%s] Error while closing pairing handler: %s", self.log_id, err)
+
+              async def _refresh_pairing_device(self) -> bool:
+                  """Refresh the pairing target after a transient refused/lost connection."""
+                  identifier = self._device.mac_address or self._device.identifier
+                  hosts = [self._device.address] if self._device.address else None
+                  if not identifier:
+                      return False
+
+                  _LOG.debug("[%s] Refreshing pairing target for %s", self.log_id, identifier)
+                  atvs = await pyatv.scan(self._loop, identifier=identifier, hosts=hosts, timeout=5)
+                  match = next((atv for atv in atvs if identifier in atv.all_identifiers), None)
+                  if match is None:
+                      return False
+                  self._pairing_atv = match
+                  return True
+
+              async def start_pairing(self, protocol: Protocol, name: str) -> int | None:
+                  """Start pairing, retrying once with a freshly scanned Apple TV on transient network failure."""
+                  if not self._pairing_atv:
+                      _LOG.error("[%s] Pairing requires initialized ATV device!", self.log_id)
+                      return None
+
+                  network_errors = (
+                      ConnectionRefusedError,
+                      ConnectionError,
+                      OSError,
+                      pyatv.exceptions.ConnectionFailedError,
+                      pyatv.exceptions.ConnectionLostError,
+                  )
+
+                  for attempt in range(2):
+                      try:
+                          _LOG.debug("[%s] Pairing started (attempt %d)", self.log_id, attempt + 1)
+                          self._pairing_process = await pyatv.pair(
+                              self._pairing_atv, protocol, self._loop, name=name
+                          )
+                          await self._pairing_process.begin()
+                          break
+                      except network_errors as err:
+                          await self._close_pairing_process()
+                          if attempt == 1:
+                              raise
+                          _LOG.warning(
+                              "[%s] Pairing connection failed, refreshing device before retry: %s",
+                              self.log_id,
+                              err,
+                          )
+                          if not await self._refresh_pairing_device():
+                              raise
+                          await asyncio.sleep(0.5)
+
+                  if self._pairing_process is None:
+                      return None
+                  if self._pairing_process.device_provides_pin:
+                      _LOG.debug("[%s] Device provides PIN", self.log_id)
+                      return 0
+
+                  _LOG.debug("[%s] We provide PIN", self.log_id)
+                  pin = random.randint(1000, 9999)  # noqa: S311  # not security-sensitive, used as ATV pairing prompt
+                  self._pairing_process.pin(pin)
+                  return pin
+          ''',
+          )
+
+          replace_once(
+              'intg-appletv/tv.py',
+              '''        await self._pairing_process.finish()
+
+                  if self._pairing_process.has_paired:
+                      _LOG.debug("[%s] Paired with device!", self.log_id)
+                      res = self._pairing_process.service
+                  else:
+                      _LOG.warning("[%s] Did not pair with device", self.log_id)
+                      self.events.emit(EVENTS.ERROR, self._device.identifier, "Could not pair with device")
+
+                  await self._pairing_process.close()
+                  self._pairing_process = None
+                  return res
+          ''',
+              '''        pairing = self._pairing_process
+                  try:
+                      await pairing.finish()
+
+                      if pairing.has_paired:
+                          _LOG.debug("[%s] Paired with device!", self.log_id)
+                          res = pairing.service
+                      else:
+                          _LOG.warning("[%s] Did not pair with device", self.log_id)
+                          self.events.emit(EVENTS.ERROR, self._device.identifier, "Could not pair with device")
+                      return res
+                  finally:
+                      await self._close_pairing_process()
+          ''',
+          )
+
+          Path('tests/unit/test_setup_resilience.py').write_text(
+              '''"""Setup-flow resilience tests."""
+
+              from unittest.mock import AsyncMock, MagicMock
+
+              import pyatv
+              from pyatv.const import Protocol
+              import pytest
+              from ucapi import DriverSetupRequest, IntegrationSetupError, SetupError
+
+              from config import AtvDevice
+              import setup_flow
+              from tv import AppleTv
+
+
+              @pytest.mark.asyncio
+              async def test_setup_handler_contains_connection_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+                  async def fail(_msg: DriverSetupRequest) -> SetupError:
+                      raise ConnectionRefusedError(111, "Connection refused")
+
+                  monkeypatch.setattr(setup_flow, "_handle_driver_setup", fail)
+                  result = await setup_flow.driver_setup_handler(DriverSetupRequest(reconfigure=False, setup_data={}))
+                  assert isinstance(result, SetupError)
+                  assert result.error_type == IntegrationSetupError.CONNECTION_REFUSED
+
+
+              @pytest.mark.asyncio
+              async def test_setup_handler_contains_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+                  async def fail(_msg: DriverSetupRequest) -> SetupError:
+                      raise TimeoutError
+
+                  monkeypatch.setattr(setup_flow, "_handle_driver_setup", fail)
+                  result = await setup_flow.driver_setup_handler(DriverSetupRequest(reconfigure=False, setup_data={}))
+                  assert isinstance(result, SetupError)
+                  assert result.error_type == IntegrationSetupError.TIMEOUT
+
+
+              @pytest.mark.asyncio
+              async def test_pairing_retries_after_refused_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+                  device = AtvDevice(
+                      identifier="apple-tv-id",
+                      name="Living Room Apple TV",
+                      credentials=[],
+                      mac_address="apple-tv-id",
+                  )
+                  initial_config = MagicMock()
+                  initial_config.all_identifiers = {"apple-tv-id"}
+                  refreshed_config = MagicMock()
+                  refreshed_config.all_identifiers = {"apple-tv-id"}
+                  atv = AppleTv(device, pairing_atv=initial_config)
+
+                  first = MagicMock()
+                  first.begin = AsyncMock(side_effect=ConnectionRefusedError(111, "Connection refused"))
+                  first.close = AsyncMock()
+                  second = MagicMock()
+                  second.begin = AsyncMock()
+                  second.close = AsyncMock()
+                  second.device_provides_pin = True
+
+                  pair_mock = AsyncMock(side_effect=[first, second])
+                  scan_mock = AsyncMock(return_value=[refreshed_config])
+                  monkeypatch.setattr(pyatv, "pair", pair_mock)
+                  monkeypatch.setattr(pyatv, "scan", scan_mock)
+
+                  result = await atv.start_pairing(Protocol.AirPlay, "Test AirPlay")
+
+                  assert result == 0
+                  assert pair_mock.await_count == 2
+                  first.close.assert_awaited_once()
+                  scan_mock.assert_awaited_once()
+                  assert atv._pairing_atv is refreshed_config  # noqa: SLF001
+
+
+              @pytest.mark.asyncio
+              async def test_finish_pairing_cleans_up_on_failure() -> None:
+                  device = AtvDevice(identifier="apple-tv-id", name="Apple TV", credentials=[])
+                  atv = AppleTv(device, pairing_atv=MagicMock())
+                  pairing = MagicMock()
+                  pairing.finish = AsyncMock(side_effect=ConnectionRefusedError(111, "Connection refused"))
+                  pairing.close = AsyncMock()
+                  atv._pairing_process = pairing  # noqa: SLF001
+
+                  with pytest.raises(ConnectionRefusedError):
+                      await atv.finish_pairing()
+
+                  pairing.close.assert_awaited_once()
+                  assert atv._pairing_process is None  # noqa: SLF001
+              ''',
+              encoding='utf-8',
+          )
+          PY
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r test-requirements.txt
+      - name: Validate
+        run: |
+          python -m ruff check intg-appletv tests/unit/test_setup_resilience.py --fix
+          python -m ruff format intg-appletv tests/unit/test_setup_resilience.py
+          python -m ruff check intg-appletv
+          python -m ruff format --check intg-appletv
+          python -m pyright
+          python -m pytest
+      - name: Commit fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add intg-appletv/setup_flow.py intg-appletv/tv.py tests/unit/test_setup_resilience.py
+          git commit -m 'Harden Apple TV setup pairing failures'
+          git push origin HEAD:feat/media-metadata-styling
