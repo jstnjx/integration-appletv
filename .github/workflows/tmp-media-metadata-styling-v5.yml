@@ -1,0 +1,64 @@
+name: Temporary media metadata styling patch v5
+
+on:
+  push:
+    branches:
+      - feat/media-metadata-styling
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.11'
+      - name: Apply feature patch and final corrections
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/tmp-media-metadata-styling-v4.yml').read_text(encoding='utf-8')
+          marker = "          python - <<'PY'\n"
+          block = workflow.split(marker, 1)[1].split("\n          PY", 1)[0]
+          exec(compile(textwrap.dedent(block), '<media-metadata-v4-patch>', 'exec'))
+
+          setup = Path('intg-appletv/setup_flow.py')
+          text = setup.read_text(encoding='utf-8')
+          old = '''                        "Use {text} for the title or artist. Supported rich-text tags include "
+                        "b, i, u, strong, and font color with a quoted #RRGGBB value."
+          '''
+          new = '''                        "Use {text} for the title or artist. Supported rich-text tags include "
+                        + "b, i, u, strong, and font color with a quoted #RRGGBB value."
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'Expected one media styling info string, found {text.count(old)}')
+          setup.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r test-requirements.txt
+      - name: Validate exactly like repository CI
+        run: |
+          python -m ruff check intg-appletv --fix
+          python -m ruff format intg-appletv tests/unit/test_media_styling.py
+          python -m ruff check intg-appletv
+          python -m ruff format --check intg-appletv
+          python -m pyright
+          python -m pytest
+      - name: Commit feature
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add intg-appletv/config.py intg-appletv/setup_flow.py intg-appletv/tv.py intg-appletv/media_styling.py tests/unit/test_media_styling.py
+          git commit -m 'Add optional media metadata styling'
+          git push origin HEAD:feat/media-metadata-styling
