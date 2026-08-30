@@ -99,50 +99,68 @@ async def driver_setup_handler(msg: SetupDriver) -> SetupAction:
     """
     Dispatch driver setup requests to corresponding handlers.
 
-    Either start the setup process or handle the selected Apple TV device.
-
-    :param msg: the setup driver request object, either DriverSetupRequest or UserDataResponse
-    :return: the setup action on how to continue
+    Setup is a user-facing transaction. No pyatv/network exception should be
+    allowed to escape this callback because an uncaught exception can abort the
+    Integration-API setup task and surface to the Remote as a refused connection.
     """
     global _setup_step
     global _cfg_add_device
     global _pairing_apple_tv
 
-    if isinstance(msg, DriverSetupRequest):
-        _setup_step = SetupSteps.INIT
-        _cfg_add_device = False
-        return await _handle_driver_setup(msg)
+    try:
+        if isinstance(msg, DriverSetupRequest):
+            _setup_step = SetupSteps.INIT
+            _cfg_add_device = False
+            return await _handle_driver_setup(msg)
 
-    if isinstance(msg, UserDataResponse):
-        _LOG.debug("%s", msg)
-        match _setup_step:
-            case SetupSteps.CONFIGURATION_MODE if "action" in msg.input_values:
-                return await _handle_configuration_mode(msg)
-            case SetupSteps.DISCOVER if "address" in msg.input_values:
-                return await _handle_discovery(msg)
-            case SetupSteps.DEVICE_CHOICE if "choice" in msg.input_values:
-                return await _handle_device_choice(msg)
-            case SetupSteps.PAIRING_AIRPLAY if "pin_airplay" in msg.input_values:
-                return await _handle_user_data_airplay_pin(msg)
-            case SetupSteps.PAIRING_COMPANION if "pin_companion" in msg.input_values:
-                return await _handle_user_data_companion_pin(msg)
-            case SetupSteps.RECONFIGURE:
-                return await _handle_device_reconfigure(msg)
-            case _:
-                pass
-        _LOG.error("No or invalid user response was received: %s", msg)
-    elif isinstance(msg, AbortDriverSetup):
-        _LOG.info("Setup was aborted with code: %s", msg.error)
-        if _pairing_apple_tv is not None:
-            await _pairing_apple_tv.disconnect()
-            _pairing_apple_tv = None
-        _setup_step = SetupSteps.INIT
+        if isinstance(msg, UserDataResponse):
+            _LOG.debug("%s", msg)
+            match _setup_step:
+                case SetupSteps.CONFIGURATION_MODE if "action" in msg.input_values:
+                    return await _handle_configuration_mode(msg)
+                case SetupSteps.DISCOVER if "address" in msg.input_values:
+                    return await _handle_discovery(msg)
+                case SetupSteps.DEVICE_CHOICE if "choice" in msg.input_values:
+                    return await _handle_device_choice(msg)
+                case SetupSteps.PAIRING_AIRPLAY if "pin_airplay" in msg.input_values:
+                    return await _handle_user_data_airplay_pin(msg)
+                case SetupSteps.PAIRING_COMPANION if "pin_companion" in msg.input_values:
+                    return await _handle_user_data_companion_pin(msg)
+                case SetupSteps.RECONFIGURE:
+                    return await _handle_device_reconfigure(msg)
+                case _:
+                    pass
+            _LOG.error("No or invalid user response was received: %s", msg)
+        elif isinstance(msg, AbortDriverSetup):
+            _LOG.info("Setup was aborted with code: %s", msg.error)
+            if _pairing_apple_tv is not None:
+                await _pairing_apple_tv.disconnect()
+                _pairing_apple_tv = None
+            _setup_step = SetupSteps.INIT
 
-    # user confirmation not used in setup process
-    # if isinstance(msg, UserConfirmationResponse):
-    #     return handle_user_confirmation(msg)
-
-    return SetupError()
+        return SetupError()
+    except (TimeoutError, pyatv.exceptions.OperationTimeoutError) as err:
+        _LOG.exception("Apple TV setup timed out: %s", err)
+        return SetupError(error_type=IntegrationSetupError.TIMEOUT)
+    except (
+        ConnectionRefusedError,
+        ConnectionError,
+        OSError,
+        pyatv.exceptions.ConnectionFailedError,
+        pyatv.exceptions.ConnectionLostError,
+    ) as err:
+        _LOG.exception("Apple TV setup connection failed: %s", err)
+        return SetupError(error_type=IntegrationSetupError.CONNECTION_REFUSED)
+    except (
+        pyatv.exceptions.AuthenticationError,
+        pyatv.exceptions.NoCredentialsError,
+        pyatv.exceptions.InvalidCredentialsError,
+    ) as err:
+        _LOG.exception("Apple TV setup authentication failed: %s", err)
+        return SetupError(error_type=IntegrationSetupError.AUTHORIZATION_ERROR)
+    except Exception as err:  # noqa: BLE001
+        _LOG.exception("Unexpected Apple TV setup failure: %s", err)
+        return SetupError(error_type=IntegrationSetupError.OTHER)
 
 
 async def _handle_driver_setup(msg: DriverSetupRequest) -> RequestUserInput | SetupError:

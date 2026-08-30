@@ -585,16 +585,67 @@ class AppleTv(interface.AudioListener, interface.DeviceListener):
         for protocol, credential in credentials.items():
             self._device.credentials.append({"protocol": protocol.value, "credentials": credential})
 
+    async def _close_pairing_process(self) -> None:
+        """Close and clear an in-progress pairing handler without masking the original error."""
+        pairing = self._pairing_process
+        self._pairing_process = None
+        if pairing is None:
+            return
+        try:
+            await pairing.close()
+        except Exception as err:  # noqa: BLE001
+            _LOG.debug("[%s] Error while closing pairing handler: %s", self.log_id, err)
+
+    async def _refresh_pairing_device(self) -> bool:
+        """Refresh the pairing target after a transient refused/lost connection."""
+        identifier = self._device.mac_address or self._device.identifier
+        hosts = [self._device.address] if self._device.address else None
+        if not identifier:
+            return False
+
+        _LOG.debug("[%s] Refreshing pairing target for %s", self.log_id, identifier)
+        atvs = await pyatv.scan(self._loop, identifier=identifier, hosts=hosts, timeout=5)
+        match = next((atv for atv in atvs if identifier in atv.all_identifiers), None)
+        if match is None:
+            return False
+        self._pairing_atv = match
+        return True
+
     async def start_pairing(self, protocol: Protocol, name: str) -> int | None:
-        """Start the pairing process with the Apple TV."""
+        """Start pairing, retrying once with a freshly scanned Apple TV on transient network failure."""
         if not self._pairing_atv:
             _LOG.error("[%s] Pairing requires initialized ATV device!", self.log_id)
             return None
 
-        _LOG.debug("[%s] Pairing started", self.log_id)
-        self._pairing_process = await pyatv.pair(self._pairing_atv, protocol, self._loop, name=name)
-        await self._pairing_process.begin()
+        network_errors = (
+            ConnectionRefusedError,
+            ConnectionError,
+            OSError,
+            pyatv.exceptions.ConnectionFailedError,
+            pyatv.exceptions.ConnectionLostError,
+        )
 
+        for attempt in range(2):
+            try:
+                _LOG.debug("[%s] Pairing started (attempt %d)", self.log_id, attempt + 1)
+                self._pairing_process = await pyatv.pair(self._pairing_atv, protocol, self._loop, name=name)
+                await self._pairing_process.begin()
+                break
+            except network_errors as err:
+                await self._close_pairing_process()
+                if attempt == 1:
+                    raise
+                _LOG.warning(
+                    "[%s] Pairing connection failed, refreshing device before retry: %s",
+                    self.log_id,
+                    err,
+                )
+                if not await self._refresh_pairing_device():
+                    raise
+                await asyncio.sleep(0.5)
+
+        if self._pairing_process is None:
+            return None
         if self._pairing_process.device_provides_pin:
             _LOG.debug("[%s] Device provides PIN", self.log_id)
             return 0
@@ -622,18 +673,19 @@ class AppleTv(interface.AudioListener, interface.DeviceListener):
         _LOG.debug("[%s] Pairing finished", self.log_id)
         res = None
 
-        await self._pairing_process.finish()
+        pairing = self._pairing_process
+        try:
+            await pairing.finish()
 
-        if self._pairing_process.has_paired:
-            _LOG.debug("[%s] Paired with device!", self.log_id)
-            res = self._pairing_process.service
-        else:
-            _LOG.warning("[%s] Did not pair with device", self.log_id)
-            self.events.emit(EVENTS.ERROR, self._device.identifier, "Could not pair with device")
-
-        await self._pairing_process.close()
-        self._pairing_process = None
-        return res
+            if pairing.has_paired:
+                _LOG.debug("[%s] Paired with device!", self.log_id)
+                res = pairing.service
+            else:
+                _LOG.warning("[%s] Did not pair with device", self.log_id)
+                self.events.emit(EVENTS.ERROR, self._device.identifier, "Could not pair with device")
+            return res
+        finally:
+            await self._close_pairing_process()
 
     async def connect(self) -> None:
         """Ensure the device is being supervised/connected (idempotent)."""
