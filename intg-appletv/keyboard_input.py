@@ -131,24 +131,16 @@ async def _close_client(client: AppleTV) -> None:
 
 
 async def current_focus(device: AtvDevice) -> tuple[KeyboardFocusState, StatusCodes]:
-    """Return the current tvOS keyboard focus state."""
-    result = await _open_client(device)
-    if result.client is None:
-        return KeyboardFocusState.Unknown, result.status
+    """Return a neutral focus state without opening a Companion connection.
 
-    try:
-        return result.client.keyboard.text_focus_state, StatusCodes.OK
-    except pyatv.exceptions.NotSupportedError:
-        _LOG.debug("[%s] tvOS keyboard focus is not supported", device.name)
-        return KeyboardFocusState.Unknown, StatusCodes.NOT_IMPLEMENTED
-    except pyatv.exceptions.BlockedStateError:
-        _LOG.debug("[%s] Keyboard connection closed while reading focus", device.name)
-        return KeyboardFocusState.Unknown, StatusCodes.SERVICE_UNAVAILABLE
-    except Exception as err:  # noqa: BLE001 - optional UI status must not affect playback
-        _LOG.exception("[%s] Could not read tvOS keyboard focus: %s", device.name, err)
-        return KeyboardFocusState.Unknown, StatusCodes.SERVER_ERROR
-    finally:
-        await _close_client(result.client)
+    The Remote calls the media-player browse endpoint as soon as the media
+    browser is opened. That endpoint exists only to expose UC's Search input and
+    must not perform Apple TV discovery or create a second Companion connection.
+    Connectivity and the real tvOS keyboard focus are validated by ``set_text``
+    when the user actually submits text.
+    """
+    _ = device
+    return KeyboardFocusState.Unknown, StatusCodes.OK
 
 
 async def set_text(device: AtvDevice, text: str) -> StatusCodes:
